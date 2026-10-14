@@ -2,20 +2,22 @@ import React, { useState, useEffect } from 'react';
 import type { MeResponse, ClassRow, UserInterestTopic } from '../../shared/schema.ts';
 import { normalizeUsername, isValidUsername } from '../../shared/username.ts';
 import { updateProfileSchema } from '../../shared/schema.ts';
-import { Save, Trash2, AlertTriangle, CheckCircle2, RotateCcw } from 'lucide-react';
 
 interface ProfileEditPageProps {
   currentUser: MeResponse;
   onProfileUpdated: (updated: MeResponse) => void;
   onAccountDeleted: () => void;
   onViewPublicProfile: (username: string) => void;
+  onLogout?: () => Promise<void> | void;
+  onCancel?: () => void;
 }
 
 export const ProfileEditPage: React.FC<ProfileEditPageProps> = ({
   currentUser,
   onProfileUpdated,
   onAccountDeleted,
-  onViewPublicProfile,
+  onLogout,
+  onCancel,
 }) => {
   const [username, setUsername] = useState(currentUser.profile.username);
   const [displayName, setDisplayName] = useState(currentUser.profile.display_name);
@@ -61,7 +63,7 @@ export const ProfileEditPage: React.FC<ProfileEditPageProps> = ({
       const res = await fetch('/api/me/interests', { method: 'DELETE' });
       if (res.ok) {
         setInterests([]);
-        setMessage({ type: 'success', text: 'Interest topics reset successfully.' });
+        setMessage({ type: 'success', text: 'Interests reset.' });
       }
     } catch {
       setMessage({ type: 'error', text: 'Failed to reset interests.' });
@@ -70,7 +72,6 @@ export const ProfileEditPage: React.FC<ProfileEditPageProps> = ({
     }
   };
 
-  // Real-time username validation
   const normalizedPreview = normalizeUsername(username);
   const isUsernameValid = isValidUsername(normalizedPreview);
 
@@ -99,19 +100,18 @@ export const ProfileEditPage: React.FC<ProfileEditPageProps> = ({
     try {
       const res = await fetch('/api/me', {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
 
-      const data = (await res.json()) as MeResponse & { error?: string };
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to update profile');
+        const errData = (await res.json()) as { error?: string };
+        throw new Error(errData.error || 'Failed to update profile');
       }
 
-      onProfileUpdated(data);
-      setMessage({ type: 'success', text: 'Profile updated successfully.' });
+      const updated = (await res.json()) as MeResponse;
+      onProfileUpdated(updated);
+      setMessage({ type: 'success', text: 'Profile updated.' });
     } catch (err) {
       setMessage({ type: 'error', text: (err as Error).message });
     } finally {
@@ -120,283 +120,230 @@ export const ProfileEditPage: React.FC<ProfileEditPageProps> = ({
   };
 
   const handleDeleteAccount = async () => {
-    if (deleteConfirmationText !== 'DELETE') {
+    if (deleteConfirmationText !== currentUser.profile.username) {
+      setDeleteError(`Type "${currentUser.profile.username}" to confirm`);
       return;
     }
 
     setDeleting(true);
     setDeleteError(null);
-    try {
-      const res = await fetch('/api/me', {
-        method: 'DELETE',
-      });
 
+    try {
+      const res = await fetch('/api/me', { method: 'DELETE' });
       if (!res.ok) {
         const data = (await res.json()) as { error?: string };
         throw new Error(data.error || 'Failed to delete account');
       }
-
       onAccountDeleted();
     } catch (err) {
       setDeleteError((err as Error).message);
+    } finally {
       setDeleting(false);
     }
   };
 
   return (
-    <div className="w-full max-w-[640px] mx-auto py-8 px-4 space-y-4">
-      {/* Header Info */}
-      <div className="flex items-center justify-between gap-2 pb-2 border-b border-border">
-        <div>
-          <h1 className="text-[24px] font-semibold text-text tracking-tight">Edit Profile</h1>
-          <p className="text-[12px] text-text-muted mt-0.5">
-            ID: <span className="font-mono text-text">{currentUser.user.id}</span>
-          </p>
-        </div>
+    <div className="w-full max-w-[640px] mx-auto px-4 py-3 space-y-5">
+      {/* Top action bar: Cancel on left, Save on right */}
+      <div className="flex items-center justify-between pb-3 border-b border-border">
         <button
           type="button"
-          onClick={() => onViewPublicProfile(currentUser.profile.username)}
-          className="min-h-[44px] px-3 rounded-sm border border-border bg-surface text-text hover:bg-primary-tint text-[14px] font-semibold transition-colors cursor-pointer"
+          onClick={onCancel}
+          className="text-[15px] text-text-muted hover:text-text cursor-pointer min-h-[44px] flex items-center transition-colors"
         >
-          View Profile
+          Cancel
+        </button>
+        <span className="text-[15px] font-semibold text-text">Edit profile</span>
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={saving || !isUsernameValid || !displayName.trim()}
+          className="text-[15px] font-semibold text-primary hover:text-primary-hover disabled:opacity-40 cursor-pointer min-h-[44px] flex items-center transition-colors"
+        >
+          {saving ? 'Saving...' : 'Done'}
         </button>
       </div>
 
-      {/* Inline Feedback Alerts */}
       {message && (
         <div
-          className={`p-3 rounded-sm border flex items-start space-x-2 text-[14px] ${
+          className={`p-3 rounded-sm text-[13px] ${
             message.type === 'success'
-              ? 'bg-primary-tint border-primary text-primary'
-              : 'bg-danger-tint border-danger text-danger'
+              ? 'bg-primary-tint text-primary'
+              : 'bg-danger-tint text-danger'
           }`}
         >
-          {message.type === 'success' ? (
-            <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
-          ) : (
-            <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
-          )}
-          <span>{message.text}</span>
+          {message.text}
         </div>
       )}
 
-      {/* Main Profile Form Card */}
-      <form onSubmit={handleSubmit} className="bg-surface border border-border rounded-card p-4 shadow-card space-y-4">
-        {/* Username */}
-        <div className="space-y-1">
-          <label htmlFor="input-username" className="block text-[12px] font-semibold text-text">
-            Username
+      {/* Form Fields */}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Name */}
+        <div>
+          <label htmlFor="display-name" className="block text-[13px] font-medium text-text-muted mb-1">
+            Name
           </label>
           <input
-            id="input-username"
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="w-full min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[14px] text-text font-mono focus:border-primary transition-colors"
-            placeholder="e.g. alice_123"
-            minLength={3}
-            maxLength={20}
-            required
-          />
-          <div className="flex justify-between items-center text-[12px] pt-0.5">
-            <span className="text-text-muted">3–20 lowercase letters, digits, underscores</span>
-            {!isUsernameValid && (
-              <span className="text-danger font-semibold">Invalid username format</span>
-            )}
-            {isUsernameValid && (
-              <span className="text-text-muted font-mono">@{normalizedPreview}</span>
-            )}
-          </div>
-        </div>
-
-        {/* Display Name */}
-        <div className="space-y-1">
-          <label htmlFor="input-displayname" className="block text-[12px] font-semibold text-text">
-            Display Name
-          </label>
-          <input
-            id="input-displayname"
+            id="display-name"
             type="text"
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
-            className="w-full min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[14px] text-text focus:border-primary transition-colors"
-            placeholder="e.g. Alice Wonderland"
             maxLength={50}
             required
+            className="w-full min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[15px] text-text focus:outline-none focus:border-primary transition-colors"
           />
-          <p className="text-[12px] text-text-muted">1–50 characters</p>
         </div>
 
-        {/* Campus Class Selection */}
-        <div className="space-y-1">
-          <label htmlFor="select-class" className="block text-[12px] font-semibold text-text">
-            Campus Class Affiliation
+        {/* Username */}
+        <div>
+          <label htmlFor="username" className="block text-[13px] font-medium text-text-muted mb-1">
+            Username
+          </label>
+          <input
+            id="username"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            maxLength={30}
+            required
+            className="w-full min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[15px] text-text font-mono focus:outline-none focus:border-primary transition-colors"
+          />
+          {username && !isUsernameValid && (
+            <span className="text-[12px] text-danger mt-1 block">
+              3-30 letters, numbers, underscores only
+            </span>
+          )}
+        </div>
+
+        {/* Bio */}
+        <div>
+          <label htmlFor="bio" className="block text-[13px] font-medium text-text-muted mb-1">
+            Bio
+          </label>
+          <textarea
+            id="bio"
+            rows={3}
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            maxLength={500}
+            placeholder="Add a bio..."
+            className="w-full bg-surface border border-border rounded-sm p-3 text-[15px] text-text focus:outline-none focus:border-primary resize-none transition-colors"
+          />
+          <span className="text-[12px] text-text-muted font-mono block text-right mt-0.5">
+            {bio.length} / 500
+          </span>
+        </div>
+
+        {/* Class Association */}
+        <div>
+          <label htmlFor="class-select" className="block text-[13px] font-medium text-text-muted mb-1">
+            Class
           </label>
           <select
-            id="select-class"
+            id="class-select"
             value={classId}
             onChange={(e) => setClassId(e.target.value)}
-            className="w-full min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[14px] text-text focus:border-primary transition-colors cursor-pointer"
+            className="w-full min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[15px] text-text focus:outline-none focus:border-primary transition-colors cursor-pointer"
           >
-            <option value="">No class selected (General)</option>
+            <option value="">None selected</option>
             {classes.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>
             ))}
           </select>
-          <p className="text-[12px] text-text-muted">Used by the discovery engine to surface class cohort posts.</p>
-        </div>
-
-        {/* Biography */}
-        <div className="space-y-1">
-          <div className="flex justify-between items-center">
-            <label htmlFor="input-bio" className="block text-[12px] font-semibold text-text">
-              Biography
-            </label>
-            <span className="text-[12px] text-text-muted">{bio.length} / 500</span>
-          </div>
-          <textarea
-            id="input-bio"
-            value={bio}
-            onChange={(e) => setBio(e.target.value)}
-            rows={3}
-            maxLength={500}
-            className="w-full bg-surface border border-border rounded-sm p-3 text-[14px] text-text focus:border-primary resize-none transition-colors"
-            placeholder="Tell others about yourself..."
-          />
         </div>
 
         {/* DM Policy */}
-        <div className="space-y-1">
-          <label htmlFor="select-dmpolicy" className="block text-[12px] font-semibold text-text">
-            Direct Message Policy
+        <div>
+          <label htmlFor="dm-policy-select" className="block text-[13px] font-medium text-text-muted mb-1">
+            Direct Messages
           </label>
           <select
-            id="select-dmpolicy"
+            id="dm-policy-select"
             value={dmPolicy}
             onChange={(e) => setDmPolicy(e.target.value)}
-            className="w-full min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[14px] text-text focus:border-primary transition-colors cursor-pointer"
+            className="w-full min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[15px] text-text focus:outline-none focus:border-primary transition-colors cursor-pointer"
           >
-            <option value="everyone">Everyone can message</option>
-            <option value="following">Only users I follow</option>
+            <option value="everyone">Everyone</option>
+            <option value="following">People I follow</option>
             <option value="none">No one</option>
           </select>
         </div>
-
-        {/* The ONE Primary Blue Button on Screen */}
-        <button
-          type="submit"
-          disabled={saving || !isUsernameValid}
-          className="w-full min-h-[44px] px-4 rounded-sm bg-primary hover:bg-primary-hover text-on-primary font-semibold text-[14px] flex items-center justify-center space-x-2 transition-colors disabled:opacity-50 cursor-pointer"
-        >
-          <Save className="w-4 h-4" />
-          <span>{saving ? 'Saving...' : 'Save Profile'}</span>
-        </button>
       </form>
 
-      {/* Discovery Interest Profile Card */}
-      <div className="bg-surface border border-border rounded-card p-4 shadow-card space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-[14px] font-semibold text-text">Learned Interest Profile</h2>
-            <p className="text-[12px] text-text-muted">
-              Topics weighted by your likes, comments, and views (14-day decay).
-            </p>
-          </div>
-          {interests.length > 0 && (
+      {/* Discovery Interests */}
+      {interests.length > 0 && (
+        <div className="pt-4 border-t border-border space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] font-medium text-text-muted">Interests</span>
             <button
               type="button"
               onClick={handleResetInterests}
               disabled={resettingInterests}
-              className="text-[12px] font-semibold text-text-muted hover:text-danger flex items-center space-x-1 cursor-pointer"
+              className="text-[13px] text-text-muted hover:text-danger cursor-pointer"
             >
-              <RotateCcw className="w-3 h-3" />
-              <span>{resettingInterests ? 'Resetting...' : 'Reset'}</span>
+              {resettingInterests ? 'Resetting...' : 'Reset'}
             </button>
-          )}
-        </div>
-
-        {interests.length === 0 ? (
-          <p className="text-[13px] text-text-muted py-2 italic">
-            No topic signals recorded yet. Interact with posts to personalize your For You feed.
-          </p>
-        ) : (
-          <div className="flex flex-wrap gap-2 pt-1">
-            {interests.map((it) => (
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {interests.map((item) => (
               <span
-                key={it.slug}
-                className="text-[12px] px-2.5 py-1 rounded-pill bg-bg border border-border text-text font-medium flex items-center space-x-1.5"
+                key={item.topic_id}
+                className="text-[13px] text-text-muted bg-surface border border-border px-2.5 py-1 rounded-sm"
               >
-                <span>{it.display_name}</span>
-                <span className="text-[10px] font-mono text-primary bg-primary-tint px-1.5 py-0.2 rounded-pill font-semibold">
-                  {it.effective_weight}
-                </span>
+                #{item.slug}
               </span>
             ))}
           </div>
-        )}
-      </div>
-
-      {/* Danger Zone Card */}
-      <div className="bg-surface border border-border rounded-card p-4 shadow-card space-y-2">
-        <div className="flex items-center space-x-2">
-          <span className="w-2 h-2 rounded-pill bg-danger inline-block" />
-          <h2 className="text-[14px] font-semibold text-danger">Delete Account</h2>
         </div>
-        <p className="text-[13px] text-text-muted">
-          Permanently delete your profile, posts, media files, and active sessions. This action cannot be reversed.
-        </p>
+      )}
+
+      {/* Account actions: Logout & Delete */}
+      <div className="pt-6 border-t border-border space-y-3">
+        {onLogout && (
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full min-h-[44px] text-center text-[14px] font-semibold text-text hover:text-danger transition-colors cursor-pointer"
+          >
+            Log out
+          </button>
+        )}
+
         <button
           type="button"
           onClick={() => setShowDeleteModal(true)}
-          className="min-h-[44px] px-3 rounded-sm border border-danger text-danger hover:bg-danger-tint text-[14px] font-semibold transition-colors cursor-pointer"
+          className="w-full min-h-[44px] text-center text-[14px] text-danger hover:underline transition-colors cursor-pointer"
         >
-          Delete Account
+          Delete account
         </button>
       </div>
 
-      {/* Delete Confirmation Modal */}
+      {/* Delete Confirmation Sheet Modal */}
       {showDeleteModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 bg-text/40 flex items-center justify-center p-4 backdrop-blur-xs"
-        >
-          <div className="bg-surface border border-border rounded-card p-6 w-full max-w-md shadow-card space-y-4">
-            <div className="flex items-start space-x-3">
-              <div className="w-10 h-10 rounded-sm bg-danger-tint flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-5 h-5 text-danger" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="text-[16px] font-semibold text-text">Confirm Account Deletion</h3>
-                <p className="text-[13px] text-text-muted">
-                  Are you absolutely sure? All your posts, uploaded media, comments, and followers will be permanently purged.
-                </p>
-              </div>
-            </div>
+        <div className="fixed inset-0 z-50 bg-[#17233A]/40 flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-sm p-4 max-w-[400px] w-full space-y-4 shadow-sheet">
+            <h3 className="text-[16px] font-semibold text-danger">Delete account</h3>
+            <p className="text-[14px] text-text-muted leading-relaxed">
+              This will permanently delete your account, posts, comments, and media. To confirm, type your username <strong>@{currentUser.profile.username}</strong> below:
+            </p>
 
             {deleteError && (
-              <div className="p-2 rounded-sm bg-danger-tint text-danger text-[12px] font-medium border border-danger">
+              <div className="p-2 rounded-sm bg-danger-tint text-danger text-[13px]">
                 {deleteError}
               </div>
             )}
 
-            <div className="space-y-1.5">
-              <label htmlFor="confirm-delete-input" className="block text-[12px] text-text font-semibold">
-                Type <span className="font-mono text-danger">DELETE</span> to confirm
-              </label>
-              <input
-                id="confirm-delete-input"
-                type="text"
-                value={deleteConfirmationText}
-                onChange={(e) => setDeleteConfirmationText(e.target.value)}
-                className="w-full min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[14px] font-mono focus:border-danger transition-colors text-text"
-                placeholder="DELETE"
-              />
-            </div>
+            <input
+              type="text"
+              value={deleteConfirmationText}
+              onChange={(e) => setDeleteConfirmationText(e.target.value)}
+              placeholder={currentUser.profile.username}
+              className="w-full min-h-[44px] bg-bg border border-border rounded-sm px-3 py-2 text-[15px] text-text font-mono focus:outline-none focus:border-danger transition-colors"
+            />
 
-            <div className="flex justify-end space-x-2 pt-2">
+            <div className="flex justify-end space-x-2 pt-1">
               <button
                 type="button"
                 onClick={() => {
@@ -405,18 +352,17 @@ export const ProfileEditPage: React.FC<ProfileEditPageProps> = ({
                   setDeleteError(null);
                 }}
                 disabled={deleting}
-                className="min-h-[44px] px-4 rounded-sm border border-border bg-surface hover:bg-bg text-text text-[14px] font-semibold cursor-pointer transition-colors"
+                className="min-h-[44px] px-3 text-[14px] text-text-muted hover:text-text cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleDeleteAccount}
-                disabled={deleteConfirmationText !== 'DELETE' || deleting}
-                className="min-h-[44px] px-4 rounded-sm bg-danger hover:bg-danger text-on-primary text-[14px] font-semibold disabled:opacity-40 flex items-center space-x-1.5 cursor-pointer transition-colors"
+                disabled={deleting || deleteConfirmationText !== currentUser.profile.username}
+                className="min-h-[44px] px-4 rounded-sm bg-danger text-on-primary font-semibold text-[14px] hover:bg-danger/90 disabled:opacity-40 cursor-pointer transition-colors"
               >
-                <Trash2 className="w-4 h-4" />
-                <span>{deleting ? 'Deleting...' : 'Delete Forever'}</span>
+                {deleting ? 'Deleting...' : 'Delete permanently'}
               </button>
             </div>
           </div>

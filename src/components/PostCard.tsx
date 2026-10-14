@@ -91,7 +91,7 @@ export const PostCard: React.FC<PostCardProps> = ({
     if (type === 'not_interested') {
       setHidden(true);
     } else {
-      setFeedbackNotice(type === 'more_like_this' ? 'Tuned: More like this' : 'Tuned: Showing less');
+      setFeedbackNotice(type === 'more_like_this' ? 'More like this' : 'Showing less');
       setTimeout(() => setFeedbackNotice(null), 3000);
     }
 
@@ -108,12 +108,12 @@ export const PostCard: React.FC<PostCardProps> = ({
 
   if (hidden) {
     return (
-      <article className="bg-surface border border-border rounded-card p-3 shadow-card text-[13px] text-text-muted flex items-center justify-between">
-        <span>Post hidden from your feed.</span>
+      <article className="py-3 border-b border-border text-[13px] text-text-muted flex items-center justify-between">
+        <span>Post hidden from feed.</span>
         <button
           type="button"
           onClick={() => setHidden(false)}
-          className="text-primary hover:underline text-[12px] font-semibold cursor-pointer"
+          className="text-primary hover:underline text-[13px] font-semibold cursor-pointer min-h-[44px] px-2 flex items-center"
         >
           Undo
         </button>
@@ -121,37 +121,42 @@ export const PostCard: React.FC<PostCardProps> = ({
     );
   }
 
+  // Extract initial for avatar
+  const authorInitial = (post.author_display_name || post.author_username || 'U')
+    .charAt(0)
+    .toUpperCase();
+
   return (
-    <article className="bg-surface border border-border rounded-card p-4 shadow-card space-y-3 relative">
-      {/* Header: Author + Expiry Chip */}
+    <article className="py-4 border-b border-border space-y-2.5 relative">
+      {/* Post header: 32px avatar circle, bold username, small muted time left */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center space-x-2.5 min-w-0">
-          <div className="w-9 h-9 rounded-sm bg-primary text-on-primary flex items-center justify-center font-semibold text-[14px] shrink-0">
-            {post.author_display_name.charAt(0).toUpperCase()}
-          </div>
-          <div className="min-w-0">
+          <button
+            type="button"
+            onClick={() => onViewAuthorProfile && onViewAuthorProfile(post.author_username)}
+            className="w-8 h-8 rounded-pill bg-primary-tint text-primary flex items-center justify-center font-semibold text-[13px] shrink-0 hover:opacity-85 transition-opacity cursor-pointer"
+            title={`View @${post.author_username}`}
+          >
+            {authorInitial}
+          </button>
+          <div className="min-w-0 flex items-center space-x-1.5 truncate">
             <button
               type="button"
               onClick={() => onViewAuthorProfile && onViewAuthorProfile(post.author_username)}
-              className="font-semibold text-text text-[14px] hover:underline truncate block text-left cursor-pointer"
+              className="font-semibold text-text text-[15px] hover:underline truncate cursor-pointer"
             >
-              {post.author_display_name}
+              {post.author_username}
             </button>
-            <div className="flex items-center space-x-1.5 text-[12px] text-text-muted font-mono truncate">
-              <span>@{post.author_username}</span>
-              {post.author_class_name && (
-                <>
-                  <span>•</span>
-                  <span className="text-primary font-sans font-medium text-[11px] bg-primary-tint px-1.5 py-0.2 rounded-pill">
-                    {post.author_class_name}
-                  </span>
-                </>
-              )}
-            </div>
+            {post.author_class_name && (
+              <span className="text-[13px] text-text-muted truncate">
+                · {post.author_class_name}
+              </span>
+            )}
           </div>
         </div>
 
         <div className="shrink-0 flex items-center space-x-2">
+          {/* Small muted time left */}
           <ExpiryChip expiresAt={post.expires_at} />
 
           {/* More options menu */}
@@ -161,35 +166,35 @@ export const PostCard: React.FC<PostCardProps> = ({
               onClick={() => setShowMenu((prev) => !prev)}
               title="More options"
               aria-label="More options"
-              className="p-1 rounded-sm text-text-muted hover:text-text hover:bg-bg transition-colors cursor-pointer"
+              className="min-h-[44px] min-w-[32px] px-1 flex items-center justify-center text-text-muted hover:text-text cursor-pointer"
             >
               <MoreHorizontal className="w-4 h-4" />
             </button>
 
             {showMenu && (
-              <div className="absolute right-0 mt-1 w-44 bg-surface border border-border rounded-sm shadow-card z-20 py-1 text-[13px]">
+              <div className="absolute right-0 mt-1 w-44 bg-surface border border-border rounded-sm shadow-sheet z-20 py-1 text-[13px]">
                 <button
                   type="button"
                   onClick={() => handleSendFeedback('more_like_this')}
-                  className="w-full text-left px-3 py-1.5 hover:bg-bg flex items-center space-x-2 text-text cursor-pointer"
+                  className="w-full text-left px-3 py-2 hover:bg-bg flex items-center space-x-2 text-text cursor-pointer min-h-[44px]"
                 >
-                  <ThumbsUp className="w-3.5 h-3.5 text-primary" />
+                  <ThumbsUp className="w-4 h-4 text-primary" />
                   <span>More like this</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleSendFeedback('show_less')}
-                  className="w-full text-left px-3 py-1.5 hover:bg-bg flex items-center space-x-2 text-text cursor-pointer"
+                  className="w-full text-left px-3 py-2 hover:bg-bg flex items-center space-x-2 text-text cursor-pointer min-h-[44px]"
                 >
-                  <ThumbsDown className="w-3.5 h-3.5 text-text-muted" />
+                  <ThumbsDown className="w-4 h-4 text-text-muted" />
                   <span>Show less like this</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleSendFeedback('not_interested')}
-                  className="w-full text-left px-3 py-1.5 hover:bg-bg flex items-center space-x-2 text-danger cursor-pointer"
+                  className="w-full text-left px-3 py-2 hover:bg-bg flex items-center space-x-2 text-danger cursor-pointer min-h-[44px]"
                 >
-                  <EyeOff className="w-3.5 h-3.5 text-danger" />
+                  <EyeOff className="w-4 h-4 text-danger" />
                   <span>Not interested</span>
                 </button>
                 <div className="my-1 border-t border-border" />
@@ -199,9 +204,9 @@ export const PostCard: React.FC<PostCardProps> = ({
                     setShowMenu(false);
                     setShowReport(true);
                   }}
-                  className="w-full text-left px-3 py-1.5 hover:bg-bg flex items-center space-x-2 text-text-muted hover:text-danger cursor-pointer"
+                  className="w-full text-left px-3 py-2 hover:bg-bg flex items-center space-x-2 text-text-muted hover:text-danger cursor-pointer min-h-[44px]"
                 >
-                  <Flag className="w-3.5 h-3.5" />
+                  <Flag className="w-4 h-4" />
                   <span>Report post</span>
                 </button>
               </div>
@@ -215,7 +220,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               disabled={deleting}
               title="Delete post"
               aria-label="Delete post"
-              className="p-1 rounded-sm text-text-muted hover:text-danger hover:bg-danger-tint transition-colors cursor-pointer"
+              className="min-h-[44px] min-w-[32px] px-1 flex items-center justify-center text-text-muted hover:text-danger cursor-pointer"
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -226,20 +231,20 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* Delete confirmation inline banner */}
       {confirmDelete && (
         <div className="p-2.5 rounded-sm bg-danger-tint border border-danger text-danger text-[13px] flex items-center justify-between">
-          <span>Delete this post permanently?</span>
+          <span>Delete post permanently?</span>
           <div className="flex items-center space-x-2">
             <button
               type="button"
               onClick={handleDeletePost}
               disabled={deleting}
-              className="px-2.5 py-1 rounded-sm bg-danger text-on-primary font-semibold text-[12px] cursor-pointer"
+              className="px-2.5 py-1 rounded-sm bg-danger text-on-primary font-semibold text-[12px] cursor-pointer min-h-[32px]"
             >
-              {deleting ? 'Deleting...' : 'Yes, Delete'}
+              {deleting ? 'Deleting...' : 'Delete'}
             </button>
             <button
               type="button"
               onClick={() => setConfirmDelete(false)}
-              className="px-2 py-1 rounded-sm border border-danger text-danger text-[12px] cursor-pointer hover:bg-surface"
+              className="px-2 py-1 rounded-sm border border-danger text-danger text-[12px] cursor-pointer hover:bg-surface min-h-[32px]"
             >
               Cancel
             </button>
@@ -254,22 +259,22 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
       )}
 
-      {/* Post body */}
-      <p className="text-[14px] text-text whitespace-pre-wrap leading-relaxed">
+      {/* Body text 15px */}
+      <p className="text-[15px] text-text whitespace-pre-wrap leading-relaxed break-words">
         {post.body}
       </p>
 
-      {/* Topics & Hashtags */}
+      {/* Hashtags as plain blue text, not chips */}
       {post.topics && post.topics.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 pt-1">
+        <div className="flex flex-wrap gap-x-2 gap-y-1">
           {post.topics.map((t) => (
             <button
               key={t.slug}
               type="button"
               onClick={() => onTopicClick && onTopicClick(t.slug)}
-              className="text-[12px] font-medium px-2 py-0.5 rounded-pill bg-bg hover:bg-primary-tint text-text-muted hover:text-primary border border-border cursor-pointer transition-colors"
+              className="text-[14px] text-primary hover:underline cursor-pointer font-normal p-0 bg-transparent border-0"
             >
-              {t.display_name}
+              #{t.slug}
             </button>
           ))}
         </div>
@@ -278,10 +283,8 @@ export const PostCard: React.FC<PostCardProps> = ({
       {/* Media gallery (up to 4 images) */}
       {post.media && post.media.length > 0 && (
         <div
-          className={`grid gap-2 rounded-sm overflow-hidden ${
-            post.media.length === 1
-              ? 'grid-cols-1'
-              : 'grid-cols-2'
+          className={`grid gap-1.5 rounded-sm overflow-hidden ${
+            post.media.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
           }`}
         >
           {post.media.map((img) => (
@@ -300,41 +303,51 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
       )}
 
-      {/* Footer Actions */}
-      <div className="pt-2 border-t border-border flex items-center justify-between text-[13px] text-text-muted">
+      {/* Action row: icon-only heart, comment, flag, counts in small muted text; light heart fill animation on like */}
+      <div className="pt-1 flex items-center justify-between text-[13px] text-text-muted">
         <div className="flex items-center space-x-4">
           {/* Like Button */}
           <button
             type="button"
             onClick={handleToggleLike}
-            className={`flex items-center space-x-1.5 py-1 px-2 rounded-sm transition-colors cursor-pointer ${
-              hasLiked ? 'text-danger font-semibold bg-danger-tint' : 'hover:text-text hover:bg-bg'
-            }`}
+            title={hasLiked ? 'Unlike' : 'Like'}
+            aria-label={hasLiked ? 'Unlike' : 'Like'}
+            className="min-h-[44px] flex items-center space-x-1.5 text-text-muted hover:text-text cursor-pointer transition-colors"
           >
-            <Heart className={`w-4 h-4 ${hasLiked ? 'fill-current' : ''}`} />
-            <span>{likesCount}</span>
+            <Heart
+              className={`w-5 h-5 ${
+                hasLiked ? 'fill-danger text-danger animate-heart-pop' : ''
+              }`}
+            />
+            <span className="text-[13px] text-text-muted font-normal">
+              {likesCount}
+            </span>
           </button>
 
-          {/* Comments Button */}
+          {/* Comment Button */}
           <button
             type="button"
             onClick={() => setShowComments(true)}
-            className="flex items-center space-x-1.5 py-1 px-2 rounded-sm hover:text-text hover:bg-bg transition-colors cursor-pointer"
+            title="Comments"
+            aria-label="Comments"
+            className="min-h-[44px] flex items-center space-x-1.5 text-text-muted hover:text-text cursor-pointer transition-colors"
           >
-            <MessageSquare className="w-4 h-4" />
-            <span>{commentsCount}</span>
+            <MessageSquare className="w-5 h-5" />
+            <span className="text-[13px] text-text-muted font-normal">
+              {commentsCount}
+            </span>
           </button>
         </div>
 
-        {/* Report Button */}
+        {/* Flag / Report Button */}
         <button
           type="button"
           onClick={() => setShowReport(true)}
           title="Report post"
           aria-label="Report post"
-          className="p-1.5 rounded-sm hover:text-danger hover:bg-bg transition-colors cursor-pointer"
+          className="min-h-[44px] min-w-[44px] flex items-center justify-center text-text-muted hover:text-danger cursor-pointer transition-colors"
         >
-          <Flag className="w-3.5 h-3.5" />
+          <Flag className="w-4 h-4" />
         </button>
       </div>
 
@@ -354,7 +367,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           targetId={post.id}
           onClose={() => setShowReport(false)}
           onReportSubmitted={() => {
-            setFeedbackNotice('Report submitted successfully.');
+            setFeedbackNotice('Report submitted.');
             setTimeout(() => setFeedbackNotice(null), 3000);
           }}
         />

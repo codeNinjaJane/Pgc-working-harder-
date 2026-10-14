@@ -6,9 +6,10 @@
 import { useEffect, useState } from 'react';
 import type { MeResponse } from '../shared/schema.ts';
 import { Navbar } from './components/Navbar.tsx';
-import { BottomTabBar } from './components/BottomTabBar.tsx';
+import { BottomTabBar, type AppTab } from './components/BottomTabBar.tsx';
 import { SignInPage } from './pages/SignInPage.tsx';
 import { FeedPage } from './pages/FeedPage.tsx';
+import { SearchPage } from './pages/SearchPage.tsx';
 import { PostComposerPage } from './pages/PostComposerPage.tsx';
 import { ProfileEditPage } from './pages/ProfileEditPage.tsx';
 import { ProfileViewPage } from './pages/ProfileViewPage.tsx';
@@ -18,7 +19,7 @@ import { DevBar } from './components/DevBar.tsx';
 export default function App() {
   const [currentUser, setCurrentUser] = useState<MeResponse | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
-  const [activeTab, setActiveTab] = useState<'feed' | 'post' | 'profile' | 'signin'>('feed');
+  const [activeTab, setActiveTab] = useState<AppTab>('feed');
   const [profileSubView, setProfileSubView] = useState<'view' | 'edit'>('view');
   const [viewUsername, setViewUsername] = useState<string>('');
 
@@ -75,22 +76,20 @@ export default function App() {
 
   if (loadingUser) {
     return (
-      <div className="min-h-screen bg-bg flex items-center justify-center text-text-muted">
-        <div className="flex items-center space-x-2.5 text-[14px]">
-          <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-pill animate-spin" />
-          <span>Loading Dialtone...</span>
+      <div className="min-h-screen bg-bg flex items-center justify-center p-4">
+        <div className="w-full max-w-[360px] space-y-3 animate-skeleton">
+          <div className="w-12 h-12 rounded-pill bg-border mx-auto" />
+          <div className="w-32 h-4 bg-border rounded-sm mx-auto" />
+          <div className="w-24 h-3 bg-border rounded-sm mx-auto" />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-bg text-text flex flex-col font-sans pb-28">
+    <div className="min-h-screen bg-bg text-text flex flex-col font-sans pb-20">
       <Navbar
-        currentUser={currentUser}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        onLogout={handleLogout}
+        onTitleClick={() => setActiveTab(currentUser ? 'feed' : 'signin')}
       />
 
       <main className="flex-1 w-full">
@@ -106,9 +105,17 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'search' && currentUser && (
+          <SearchPage
+            currentUserId={currentUser.user.id}
+            onViewAuthorProfile={handleViewAuthorProfile}
+          />
+        )}
+
         {activeTab === 'post' && currentUser && (
           <PostComposerPage
             onPostCreated={() => setActiveTab('feed')}
+            onCancel={() => setActiveTab('feed')}
           />
         )}
 
@@ -117,10 +124,12 @@ export default function App() {
             currentUser={currentUser}
             onProfileUpdated={handleProfileUpdated}
             onAccountDeleted={handleAccountDeleted}
+            onLogout={handleLogout}
             onViewPublicProfile={(u) => {
               setViewUsername(u);
               setProfileSubView('view');
             }}
+            onCancel={() => setProfileSubView('view')}
           />
         )}
 
@@ -129,6 +138,7 @@ export default function App() {
             initialUsername={viewUsername || currentUser.profile.username}
             currentUserId={currentUser.user.id}
             onNavigateToEditProfile={() => setProfileSubView('edit')}
+            onLogout={handleLogout}
           />
         )}
 
@@ -137,11 +147,7 @@ export default function App() {
         )}
       </main>
 
-      <footer className="border-t border-border py-4 text-center text-[12px] text-text-muted hidden sm:block">
-        Dialtone · Ephemeral Social Network
-      </footer>
-
-      {/* Mobile-first bottom tab bar */}
+      {/* Bottom tab bar: icon-only, 4 tabs */}
       <BottomTabBar
         activeTab={activeTab}
         setActiveTab={(tab) => {

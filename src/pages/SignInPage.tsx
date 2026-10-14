@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Lock, ArrowRight } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 
 interface SignInPageProps {
   onSuccessRedirect?: () => void;
@@ -15,50 +15,40 @@ export const SignInPage: React.FC<SignInPageProps> = () => {
   };
 
   return (
-    <div className="w-full max-w-[640px] mx-auto py-8 px-4">
-      <div className="bg-surface border border-border rounded-card p-4 shadow-card space-y-4">
-        {/* Header */}
-        <div className="text-center py-2 space-y-1.5">
-          <div className="w-10 h-10 rounded-sm bg-primary-tint text-primary flex items-center justify-center mx-auto mb-2">
-            <Lock className="w-5 h-5" />
-          </div>
-          <h1 className="text-[24px] font-semibold text-text tracking-tight">Sign In</h1>
+    <div className="w-full max-w-[360px] mx-auto py-20 px-4">
+      <div className="space-y-6 text-center">
+        {/* Minimal branding */}
+        <div className="space-y-1">
+          <span className="text-[20px] font-semibold text-text tracking-tight block">
+            Dialtone
+          </span>
           <p className="text-[14px] text-text-muted">
-            Welcome to Dialtone. Sign in with your student account to continue.
+            Sign in with your student account.
           </p>
         </div>
 
         {/* Actions */}
-        <div className="space-y-3 pt-2">
-          {/* Primary Action Button */}
+        <div className="space-y-2.5 pt-1">
           <button
             type="button"
             onClick={() => handleGoogleSignIn(false)}
             disabled={loading !== null}
             className="w-full min-h-[44px] px-4 rounded-sm bg-primary hover:bg-primary-hover text-on-primary font-semibold text-[14px] flex items-center justify-center space-x-2 transition-colors disabled:opacity-50 cursor-pointer"
           >
-            <span>{loading === 'real' ? 'Redirecting to Google...' : 'Continue with Google'}</span>
+            <span>{loading === 'real' ? 'Connecting...' : 'Continue with Google'}</span>
             <ArrowRight className="w-4 h-4 ml-1" />
           </button>
 
           {/* DEV-ONLY: remove before launch */}
           {import.meta.env.DEV && (
-            <>
-              {/* Secondary Action: Outlined Button */}
-              <button
-                type="button"
-                onClick={() => handleGoogleSignIn(true)}
-                disabled={loading !== null}
-                className="w-full min-h-[44px] px-4 rounded-sm bg-surface hover:bg-primary-tint border border-border text-text font-semibold text-[14px] flex items-center justify-center space-x-2 transition-colors disabled:opacity-50 cursor-pointer"
-              >
-                <span>
-                  {loading === 'mock' ? 'Signing in...' : 'Development Sign-In (Simulation)'}
-                </span>
-              </button>
-              <p className="text-[12px] text-text-muted text-center">
-                Development mode simulation allows testing without live Google credentials.
-              </p>
-            </>
+            <button
+              type="button"
+              onClick={() => handleGoogleSignIn(true)}
+              disabled={loading !== null}
+              className="w-full min-h-[44px] px-4 rounded-sm border border-border bg-surface hover:bg-bg text-text-muted hover:text-text text-[13px] font-medium flex items-center justify-center transition-colors disabled:opacity-50 cursor-pointer"
+            >
+              <span>{loading === 'mock' ? 'Signing in...' : 'Sign in as test user'}</span>
+            </button>
           )}
         </div>
       </div>

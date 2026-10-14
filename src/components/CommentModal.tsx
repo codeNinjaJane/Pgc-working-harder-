@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { CommentItem, CommentsResponse } from '../../shared/schema.ts';
-import { MessageSquare, X, Send, Trash2 } from 'lucide-react';
+import { X, Trash2 } from 'lucide-react';
 
 interface CommentModalProps {
   postId: string;
@@ -83,24 +83,22 @@ export const CommentModal: React.FC<CommentModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-[#17233A]/40 flex items-center justify-center p-4">
-      <div className="bg-surface border border-border rounded-card p-4 max-w-[500px] w-full max-h-[85vh] flex flex-col shadow-card">
+      <div className="bg-surface border border-border rounded-sm p-4 max-w-[480px] w-full max-h-[80vh] flex flex-col shadow-sheet">
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-border">
-          <div className="flex items-center space-x-2">
-            <MessageSquare className="w-5 h-5 text-primary" />
-            <h3 className="text-[16px] font-semibold text-text">Comments</h3>
-          </div>
+          <span className="text-[15px] font-semibold text-text">Comments</span>
           <button
             type="button"
             onClick={onClose}
-            className="p-1 rounded-sm text-text-muted hover:text-text hover:bg-bg cursor-pointer"
+            aria-label="Close"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center text-text-muted hover:text-text cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {error && (
-          <div className="my-2 p-2 rounded-sm bg-danger-tint border border-danger text-danger text-[12px]">
+          <div className="my-2 p-2 rounded-sm bg-danger-tint text-danger text-[13px]">
             {error}
           </div>
         )}
@@ -108,14 +106,19 @@ export const CommentModal: React.FC<CommentModalProps> = ({
         {/* Comment list */}
         <div className="flex-1 overflow-y-auto py-3 space-y-3">
           {loading && (
-            <div className="text-center py-6 text-text-muted text-[14px]">
-              Loading comments...
+            <div className="space-y-3 py-2">
+              {[1, 2].map((i) => (
+                <div key={i} className="space-y-1 animate-skeleton">
+                  <div className="w-24 h-3.5 bg-border rounded-sm" />
+                  <div className="w-48 h-3 bg-border rounded-sm" />
+                </div>
+              ))}
             </div>
           )}
 
           {!loading && comments.length === 0 && (
-            <div className="text-center py-8 text-text-muted text-[14px]">
-              No comments yet. Start the conversation!
+            <div className="text-center py-8 text-text-muted text-[15px]">
+              No comments yet.
             </div>
           )}
 
@@ -123,54 +126,53 @@ export const CommentModal: React.FC<CommentModalProps> = ({
             comments.map((comment) => (
               <div
                 key={comment.id}
-                className="p-3 rounded-sm bg-bg border border-border space-y-1 text-[14px]"
+                className="py-2 border-b border-border/60 space-y-1 text-[15px]"
               >
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-1.5">
-                    <span className="font-semibold text-text">{comment.author_display_name}</span>
-                    <span className="text-[12px] text-text-muted font-mono">
-                      @{comment.author_username}
+                  <div className="flex items-center space-x-1.5 truncate">
+                    <span className="font-semibold text-text text-[14px]">
+                      {comment.author_username}
+                    </span>
+                    <span className="text-[12px] text-text-muted">
+                      · {new Date(comment.created_at).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
                     </span>
                   </div>
                   {comment.author_id === currentUserId && (
                     <button
                       type="button"
                       onClick={() => handleDeleteComment(comment.id)}
-                      className="text-text-muted hover:text-danger p-1 rounded-sm cursor-pointer"
+                      className="text-text-muted hover:text-danger min-h-[32px] min-w-[32px] flex items-center justify-center cursor-pointer"
                       title="Delete comment"
+                      aria-label="Delete comment"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   )}
                 </div>
-                <p className="text-text whitespace-pre-wrap">{comment.body}</p>
-                <span className="text-[11px] text-text-muted block pt-0.5">
-                  {new Date(comment.created_at).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </span>
+                <p className="text-text text-[15px] whitespace-pre-wrap">{comment.body}</p>
               </div>
             ))}
         </div>
 
         {/* Input box */}
-        <form onSubmit={handleAddComment} className="pt-3 border-t border-border flex gap-2">
+        <form onSubmit={handleAddComment} className="pt-3 border-t border-border flex items-center gap-2">
           <input
             type="text"
             value={commentText}
             onChange={(e) => setCommentText(e.target.value)}
-            placeholder="Write a comment..."
+            placeholder="Add a comment..."
             maxLength={500}
-            className="flex-1 min-h-[44px] bg-surface border border-border rounded-sm px-3 py-2 text-[14px] text-text focus:border-primary transition-colors"
+            className="flex-1 min-h-[44px] bg-bg border border-border rounded-sm px-3 py-2 text-[15px] text-text focus:outline-none focus:border-primary transition-colors"
           />
           <button
             type="submit"
             disabled={submitting || !commentText.trim()}
-            className="min-h-[44px] px-4 rounded-sm bg-primary hover:bg-primary-hover disabled:opacity-50 text-on-primary font-semibold text-[14px] flex items-center justify-center transition-colors cursor-pointer shrink-0"
+            className="min-h-[44px] px-3 font-semibold text-[14px] text-primary hover:text-primary-hover disabled:opacity-40 cursor-pointer transition-colors"
           >
-            <Send className="w-4 h-4 mr-1" />
-            <span>Send</span>
+            {submitting ? 'Posting...' : 'Post'}
           </button>
         </form>
       </div>

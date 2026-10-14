@@ -1,5 +1,4 @@
 import React from 'react';
-import { Clock } from 'lucide-react';
 
 interface ExpiryChipProps {
   expiresAt: string;
@@ -9,47 +8,27 @@ export const ExpiryChip: React.FC<ExpiryChipProps> = ({ expiresAt }) => {
   const remainingMs = new Date(expiresAt).getTime() - Date.now();
 
   if (remainingMs <= 0) {
-    return (
-      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-pill text-[11px] font-semibold bg-danger-tint text-danger border border-danger">
-        <Clock className="w-3 h-3" />
-        <span>Expired</span>
-      </span>
-    );
+    return <span className="text-[12px] text-danger font-semibold">Expired</span>;
   }
 
   const hoursRemaining = remainingMs / (1000 * 60 * 60);
 
-  // Red chip under 24 hours
+  // Red only under 24h
   if (hoursRemaining < 24) {
     const text =
       hoursRemaining < 1
-        ? `${Math.max(1, Math.floor(remainingMs / (1000 * 60)))}m left`
-        : `${Math.floor(hoursRemaining)}h left`;
-    return (
-      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-pill text-[11px] font-semibold bg-danger-tint text-danger border border-danger">
-        <Clock className="w-3 h-3" />
-        <span>{text}</span>
-      </span>
-    );
+        ? `${Math.max(1, Math.floor(remainingMs / (1000 * 60)))}m`
+        : `${Math.floor(hoursRemaining)}h`;
+    return <span className="text-[12px] text-danger font-semibold">{text}</span>;
   }
 
-  // Yellow chip under 48 hours
+  // Yellow only when under 48h
   if (hoursRemaining < 48) {
-    const text = `${Math.floor(hoursRemaining)}h left`;
-    return (
-      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-pill text-[11px] font-semibold bg-accent text-accent-text">
-        <Clock className="w-3 h-3" />
-        <span>{text}</span>
-      </span>
-    );
+    const text = `${Math.floor(hoursRemaining)}h`;
+    return <span className="text-[12px] text-[#C29207] font-semibold">{text}</span>;
   }
 
-  // Normal grey chip 48h and above
+  // Small muted text (e.g. "6d")
   const days = Math.ceil(hoursRemaining / 24);
-  return (
-    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-pill text-[11px] text-text-muted bg-bg border border-border">
-      <Clock className="w-3 h-3" />
-      <span>{days}d left</span>
-    </span>
-  );
+  return <span className="text-[12px] text-text-muted font-normal">{days}d</span>;
 };
