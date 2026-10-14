@@ -196,6 +196,61 @@ CREATE INDEX IF NOT EXISTS idx_trend_snapshots_window ON trend_snapshots(window,
 CREATE INDEX IF NOT EXISTS idx_rate_limits_key ON rate_limits(key, window_start);
 `;
 
+export const MIGRATION_004_MESSAGING_SQL = `
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS conversation_members (
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (conversation_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_members_user ON conversation_members(user_id);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  sent_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, sent_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_expires ON messages(expires_at);
+
+CREATE TABLE IF NOT EXISTS message_media (
+  message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  media_id TEXT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+  PRIMARY KEY (message_id, media_id)
+);
+
+CREATE TABLE IF NOT EXISTS blocks (
+  blocker_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (blocker_id, blocked_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_blocks_blocked ON blocks(blocked_id);
+
+CREATE TABLE IF NOT EXISTS report_evidence (
+  id TEXT PRIMARY KEY NOT NULL,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  snapshot TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_evidence_report ON report_evidence(report_id);
+CREATE INDEX IF NOT EXISTS idx_report_evidence_expires ON report_evidence(expires_at);
+`;
+
 export interface MigrationRecord {
   name: string;
   sql: string;
@@ -216,7 +271,18 @@ export const MIGRATIONS: MigrationRecord[] = [
   },
 ];
 
-export async function runMigrations(db: D1Database): Promise<{ applied: string[] }> {
+export const ALL_MIGRATIONS: MigrationRecord[] = [
+  ...MIGRATIONS,
+  {
+    name: '004_messaging.sql',
+    sql: MIGRATION_004_MESSAGING_SQL,
+  },
+];
+
+export async function runMigrations(
+  db: D1Database,
+  migrationsToRun: MigrationRecord[] = MIGRATIONS
+): Promise<{ applied: string[] }> {
   // Ensure migration tracking table exists
   await db.exec(`
     CREATE TABLE IF NOT EXISTS _migrations (
@@ -230,7 +296,7 @@ export async function runMigrations(db: D1Database): Promise<{ applied: string[]
 
   const newlyApplied: string[] = [];
 
-  for (const migration of MIGRATIONS) {
+  for (const migration of migrationsToRun) {
     if (!appliedSet.has(migration.name)) {
       // Execute the migration SQL
       await db.exec(migration.sql);

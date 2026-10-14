@@ -35,7 +35,7 @@ export const updateProfileSchema = z
       .optional(),
     avatar_media_id: z.string().nullable().optional(),
     class_id: z.string().nullable().optional(),
-    dm_policy: z.enum(['everyone', 'following', 'none']).optional(),
+    dm_policy: z.enum(['everyone', 'followed_only', 'nobody', 'following', 'none']).optional(),
     feed_preferences: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
   })
   .strict();
@@ -78,11 +78,53 @@ export const createCommentSchema = z
 export type CreateCommentInput = z.infer<typeof createCommentSchema>;
 
 /**
+ * Create conversation schema for POST /api/conversations
+ */
+export const createConversationSchema = z
+  .object({
+    user_id: z.string().min(1, { message: 'Target user ID is required' }),
+  })
+  .strict();
+
+export type CreateConversationInput = z.infer<typeof createConversationSchema>;
+
+/**
+ * Create message schema for POST /api/conversations/:id/messages
+ */
+export const createMessageSchema = z
+  .object({
+    body: z
+      .string()
+      .trim()
+      .min(1, { message: 'Message content cannot be empty' })
+      .max(2000, { message: 'Message content cannot exceed 2000 characters' }),
+    media_ids: z
+      .array(z.string().min(1))
+      .max(1, { message: 'Maximum 1 image allowed per message' })
+      .optional()
+      .default([]),
+  })
+  .strict();
+
+export type CreateMessageInput = z.infer<typeof createMessageSchema>;
+
+/**
+ * Create block schema for POST /api/blocks
+ */
+export const createBlockSchema = z
+  .object({
+    user_id: z.string().min(1, { message: 'Target user ID is required' }),
+  })
+  .strict();
+
+export type CreateBlockInput = z.infer<typeof createBlockSchema>;
+
+/**
  * Create report schema for POST /api/reports
  */
 export const createReportSchema = z
   .object({
-    target_type: z.enum(['post', 'comment', 'user']),
+    target_type: z.enum(['post', 'comment', 'user', 'message']),
     target_id: z.string().min(1, { message: 'Target ID required' }),
     reason: z
       .string()
@@ -268,6 +310,71 @@ export interface TrendItem {
   display_name: string;
   window: '24h' | '7d';
   score: number;
+}
+
+/**
+ * Conversation item interface
+ */
+export interface ConversationItem {
+  id: string;
+  created_at: string;
+  other_user: {
+    id: string;
+    username: string;
+    display_name: string;
+    avatar_media_id: string | null;
+  };
+  last_message?: {
+    id: string;
+    sender_id: string;
+    body: string;
+    sent_at: string;
+    expires_at: string;
+  } | null;
+}
+
+/**
+ * Message item interface
+ */
+export interface MessageItem {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  sender_username: string;
+  sender_display_name: string;
+  body: string;
+  sent_at: string;
+  expires_at: string;
+  media: MediaItem[];
+}
+
+/**
+ * Block item interface
+ */
+export interface BlockItem {
+  user_id: string;
+  username: string;
+  display_name: string;
+  created_at: string;
+}
+
+/**
+ * Report evidence interface
+ */
+export interface ReportEvidenceItem {
+  id: string;
+  report_id: string;
+  snapshot: {
+    message_id: string;
+    conversation_id?: string;
+    sender_id: string;
+    body: string;
+    sent_at: string;
+    expires_at: string;
+    attachment_keys: string[];
+  };
+  created_at: string;
+  expires_at: string;
 }
 
 

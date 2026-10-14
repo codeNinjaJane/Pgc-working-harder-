@@ -119,3 +119,41 @@ export interface OAuthStatePayload {
   nonce: string;
   createdAt: number;
 }
+
+export interface ConversationRow {
+  id: string;
+  created_at: string;
+}
+
+export interface ConversationMemberRow {
+  conversation_id: string;
+  user_id: string;
+}
+
+export interface MessageRow {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  body: string;
+  sent_at: string;
+  expires_at: string;
+}
+
+export interface MessageMediaRow {
+  message_id: string;
+  media_id: string;
+}
+
+export interface BlockRow {
+  blocker_id: string;
+  blocked_id: string;
+  created_at: string;
+}
+
+export interface ReportEvidenceRow {
+  id: string;
+  report_id: string;
+  snapshot: string;
+  created_at: string;
+  expires_at: string;
+}

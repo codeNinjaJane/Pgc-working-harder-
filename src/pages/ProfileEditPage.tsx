@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import type { MeResponse, ClassRow, UserInterestTopic } from '../../shared/schema.ts';
 import { normalizeUsername, isValidUsername } from '../../shared/username.ts';
 import { updateProfileSchema } from '../../shared/schema.ts';
+import { X } from 'lucide-react';
 
 interface ProfileEditPageProps {
   currentUser: MeResponse;
@@ -69,6 +70,17 @@ export const ProfileEditPage: React.FC<ProfileEditPageProps> = ({
       setMessage({ type: 'error', text: 'Failed to reset interests.' });
     } finally {
       setResettingInterests(false);
+    }
+  };
+
+  const handleRemoveInterest = async (topicId: string) => {
+    try {
+      const res = await fetch(`/api/me/interests/${topicId}`, { method: 'DELETE' });
+      if (res.ok) {
+        setInterests((prev) => prev.filter((i) => i.topic_id !== topicId));
+      }
+    } catch {
+      // Ignored
     }
   };
 
@@ -290,9 +302,18 @@ export const ProfileEditPage: React.FC<ProfileEditPageProps> = ({
             {interests.map((item) => (
               <span
                 key={item.topic_id}
-                className="text-[13px] text-text-muted bg-surface border border-border px-2.5 py-1 rounded-sm"
+                className="text-[13px] text-text-muted bg-surface border border-border pl-2.5 pr-1.5 py-1 rounded-sm flex items-center space-x-1"
               >
-                #{item.slug}
+                <span>#{item.slug}</span>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveInterest(item.topic_id)}
+                  title={`Remove #${item.slug}`}
+                  aria-label={`Remove #${item.slug}`}
+                  className="p-0.5 hover:text-danger cursor-pointer flex items-center justify-center"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </span>
             ))}
           </div>

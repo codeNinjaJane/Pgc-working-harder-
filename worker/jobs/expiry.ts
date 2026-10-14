@@ -7,6 +7,7 @@ export interface ExpiryJobResult {
   deletedPostIds: string[];
   extendedPostIds: string[];
   prunedOrphanMedia: number;
+  prunedMessages?: number;
 }
 
 /**
@@ -132,6 +133,78 @@ export async function runPostLifecycleExpiry(
     }
   }
 
+  // Prune impressions older than 30 days
+  const thirtyDaysAgoIso = new Date(referenceTime - 30 * 24 * 60 * 60 * 1000).toISOString();
+  await env.DB.prepare('DELETE FROM impressions WHERE shown_at < ?')
+    .bind(thirtyDaysAgoIso)
+    .run();
+
+  // Message expiry: delete messages older than 14 days + attached media & R2 objects
+  let prunedMessages = 0;
+  try {
+    const expiredMessages = await env.DB.prepare(
+      'SELECT id FROM messages WHERE expires_at <= ?'
+    )
+      .bind(referenceIso)
+      .all<{ id: string }>();
+
+    const msgIds = (expiredMessages.results || []).map((m) => m.id);
+
+    for (const msgId of msgIds) {
+      const mediaList = await env.DB.prepare(
+        `SELECT m.id, m.object_key
+         FROM media m
+         JOIN message_media mm ON mm.media_id = m.id
+         WHERE mm.message_id = ?`
+      )
+        .bind(msgId)
+        .all<{ id: string; object_key: string }>();
+
+      let allR2Deleted = true;
+      const mediaToDelete: string[] = [];
+
+      for (const m of mediaList.results || []) {
+        let r2Deleted = true;
+        if (env.MEDIA_BUCKET) {
+          try {
+            await env.MEDIA_BUCKET.delete(m.object_key);
+          } catch (err) {
+            console.error(`Failed to delete message R2 object ${m.object_key}:`, err);
+            r2Deleted = false;
+            allR2Deleted = false;
+          }
+        }
+        if (r2Deleted) {
+          mediaToDelete.push(m.id);
+        }
+      }
+
+      // If an R2 delete fails, keep the DB row so it retries
+      if (allR2Deleted) {
+        const batchStatements = [
+          env.DB.prepare('DELETE FROM message_media WHERE message_id = ?').bind(msgId),
+        ];
+        for (const mid of mediaToDelete) {
+          batchStatements.push(env.DB.prepare('DELETE FROM media WHERE id = ?').bind(mid));
+        }
+        batchStatements.push(env.DB.prepare('DELETE FROM messages WHERE id = ?').bind(msgId));
+        await env.DB.batch(batchStatements);
+        prunedMessages++;
+      }
+    }
+  } catch {
+    // messages table does not exist if migration 004 has not yet run
+  }
+
+  // Report evidence expiry: delete evidence older than 30 days
+  try {
+    await env.DB.prepare('DELETE FROM report_evidence WHERE expires_at <= ?')
+      .bind(referenceIso)
+      .run();
+  } catch {
+    // report_evidence table does not exist if migration 004 has not yet run
+  }
+
   return {
     checked: posts.length,
     extended: extendedCount,
@@ -139,6 +212,7 @@ export async function runPostLifecycleExpiry(
     deletedPostIds,
     extendedPostIds,
     prunedOrphanMedia,
+    prunedMessages,
   };
 }
 

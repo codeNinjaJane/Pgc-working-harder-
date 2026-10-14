@@ -7,6 +7,7 @@ import type {
   PostRow,
   MediaRow,
   ClassRow,
+  MessageRow,
 } from './types.ts';
 import {
   authenticateRequest,
@@ -26,12 +27,18 @@ import {
   createReportSchema,
   createFeedbackSchema,
   updateReportSchema,
+  createConversationSchema,
+  createMessageSchema,
+  createBlockSchema,
   type PostItem,
   type CommentItem,
   type MediaItem,
   type TopicItem,
   type UserInterestTopic,
   type TrendItem,
+  type ConversationItem,
+  type MessageItem,
+  type BlockItem,
 } from '../shared/schema.ts';
 import { checkRateLimit } from './rate-limit.ts';
 import { runPostLifecycleExpiry, deletePostAndMedia } from './jobs/expiry.ts';
@@ -89,6 +96,56 @@ function decodeCursor(cursorStr: string): { createdAt: string; id: string } | nu
     return { createdAt: cursorStr, id: '' };
   }
   return null;
+}
+
+/**
+ * Checks if userA has blocked userB or vice versa.
+ */
+async function isBlockedBetween(db: D1Database, userA: string, userB: string): Promise<boolean> {
+  const row = await db.prepare(
+    'SELECT 1 FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1'
+  ).bind(userA, userB, userB, userA).first();
+  return !!row;
+}
+
+/**
+ * Checks if sender is permitted to send a DM to recipient based on blocks and dm_policy.
+ */
+async function canSendDmTo(
+  db: D1Database,
+  senderId: string,
+  recipientId: string
+): Promise<{ allowed: boolean; reason?: string }> {
+  // 1. Check blocking in either direction
+  const blocked = await isBlockedBetween(db, senderId, recipientId);
+  if (blocked) {
+    return { allowed: false, reason: 'Forbidden: Cannot message this user' };
+  }
+
+  // 2. Check recipient DM policy
+  const settings = await db.prepare(
+    'SELECT dm_policy FROM user_settings WHERE user_id = ?'
+  ).bind(recipientId).first<{ dm_policy: string }>();
+
+  // Default dm_policy is followed_only
+  const policy = settings?.dm_policy || 'followed_only';
+
+  if (policy === 'nobody' || policy === 'none') {
+    return { allowed: false, reason: 'Forbidden: User does not accept direct messages' };
+  }
+
+  if (policy === 'followed_only' || policy === 'following') {
+    // Recipient must follow sender
+    const isFollowed = await db.prepare(
+      'SELECT 1 FROM follows WHERE follower_id = ? AND followed_id = ? LIMIT 1'
+    ).bind(recipientId, senderId).first();
+
+    if (!isFollowed) {
+      return { allowed: false, reason: 'Forbidden: User only accepts direct messages from users they follow' };
+    }
+  }
+
+  return { allowed: true };
 }
 
 function generateRandomUsername(): string {
@@ -260,10 +317,50 @@ async function updateUserTopicSignalsForPost(
   }
 }
 
+/**
+ * Computes trend snapshots for active topics requiring at least 3 distinct authors.
+ */
+export async function computeTrends(db: D1Database, nowMs = Date.now()): Promise<void> {
+  const windows: Array<{ window: '24h' | '7d'; durationMs: number }> = [
+    { window: '24h', durationMs: 24 * 60 * 60 * 1000 },
+    { window: '7d', durationMs: 7 * 24 * 60 * 60 * 1000 },
+  ];
+
+  for (const { window, durationMs } of windows) {
+    const cutoffIso = new Date(nowMs - durationMs).toISOString();
+    const rows = await db
+      .prepare(
+        `SELECT pt.topic_id, COUNT(DISTINCT p.author_id) as author_count, COUNT(*) as post_count
+         FROM post_topics pt
+         JOIN posts p ON p.id = pt.post_id
+         WHERE p.status = 'active' AND p.created_at >= ?
+         GROUP BY pt.topic_id
+         HAVING author_count >= 3`
+      )
+      .bind(cutoffIso)
+      .all<{ topic_id: string; author_count: number; post_count: number }>();
+
+    const results = rows.results || [];
+    await db.prepare('DELETE FROM trend_snapshots WHERE window = ?').bind(window).run();
+
+    for (const r of results) {
+      const snapId = `snap_${generateRandomString(16).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      const score = Number(r.author_count) * 2.0 + Number(r.post_count);
+      await db
+        .prepare(
+          'INSERT INTO trend_snapshots (id, topic_id, window, window_start, score) VALUES (?, ?, ?, ?, ?)'
+        )
+        .bind(snapId, r.topic_id, window, cutoffIso, score)
+        .run();
+    }
+  }
+}
+
 export default {
-  // Cloudflare Scheduled Cron Trigger handler for daily post expiry job
+  // Cloudflare Scheduled Cron Trigger handler for daily post expiry and hourly trends job
   async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     await runPostLifecycleExpiry(env);
+    await computeTrends(env.DB);
   },
 
   async fetch(request: Request, env: Env, _ctx?: ExecutionContext): Promise<Response> {
@@ -858,7 +955,7 @@ export default {
     // GET /api/trends - Topic trend snapshots
     if (pathname === '/api/trends' && method === 'GET') {
       const windowParam = url.searchParams.get('window') === '7d' ? '7d' : '24h';
-      const trends = await env.DB.prepare(
+      let trends = await env.DB.prepare(
         `SELECT ts.topic_id, t.slug, t.display_name, ts.window, ts.score
          FROM trend_snapshots ts
          JOIN topics t ON t.id = ts.topic_id
@@ -868,6 +965,20 @@ export default {
       )
         .bind(windowParam)
         .all<TrendItem>();
+
+      if (!trends.results || trends.results.length === 0) {
+        await computeTrends(env.DB);
+        trends = await env.DB.prepare(
+          `SELECT ts.topic_id, t.slug, t.display_name, ts.window, ts.score
+           FROM trend_snapshots ts
+           JOIN topics t ON t.id = ts.topic_id
+           WHERE ts.window = ?
+           ORDER BY ts.score DESC
+           LIMIT 20`
+        )
+          .bind(windowParam)
+          .all<TrendItem>();
+      }
 
       return jsonResponse({
         window: windowParam,
@@ -903,6 +1014,28 @@ export default {
       }));
 
       return jsonResponse({ interests });
+    }
+
+    // DELETE /api/me/interests/:id - Remove individual interest topic signal
+    if (
+      pathname.startsWith('/api/me/interests/') &&
+      pathname !== '/api/me/interests/reset' &&
+      method === 'DELETE'
+    ) {
+      const auth = await authenticateRequest(request, env.DB);
+      if (!auth) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
+
+      const topicParam = pathname.slice('/api/me/interests/'.length);
+      await env.DB.prepare(
+        `DELETE FROM user_topic_signals
+         WHERE user_id = ? AND (topic_id = ? OR topic_id IN (SELECT id FROM topics WHERE slug = ?))`
+      )
+        .bind(auth.user.id, topicParam, topicParam)
+        .run();
+
+      return jsonResponse({ success: true, message: 'Topic signal removed' });
     }
 
     // DELETE /api/me/interests or POST /api/me/interests/reset - Reset topic signals
@@ -973,14 +1106,24 @@ export default {
       const impressions = body.impressions || [];
       const now = new Date().toISOString();
 
+      const oneHourAgoIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
       for (const item of impressions) {
         if (!item.post_id) continue;
-        const impId = `imp_${generateRandomString(16).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-        await env.DB.prepare(
-          'INSERT INTO impressions (id, viewer_id, post_id, shown_at, position) VALUES (?, ?, ?, ?, ?)'
+        const existing = await env.DB.prepare(
+          'SELECT id FROM impressions WHERE viewer_id = ? AND post_id = ? AND shown_at >= ? LIMIT 1'
         )
-          .bind(impId, auth.user.id, item.post_id, now, item.position || 0)
-          .run();
+          .bind(auth.user.id, item.post_id, oneHourAgoIso)
+          .first();
+
+        if (!existing) {
+          const impId = `imp_${generateRandomString(16).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+          await env.DB.prepare(
+            'INSERT INTO impressions (id, viewer_id, post_id, shown_at, position) VALUES (?, ?, ?, ?, ?)'
+          )
+            .bind(impId, auth.user.id, item.post_id, now, item.position || 0)
+            .run();
+        }
 
         // View over 3 seconds (+0.1 signal)
         if (item.duration_ms && item.duration_ms >= 3000) {
@@ -1710,6 +1853,489 @@ export default {
       return jsonResponse({ success: true, is_following: false });
     }
 
+    // ==========================================
+    // 5. MESSAGING & BLOCKING ROUTES (M4)
+    // ==========================================
+
+    // GET /api/conversations - List conversations for authenticated user
+    if (pathname === '/api/conversations' && method === 'GET') {
+      const auth = await authenticateRequest(request, env.DB);
+      if (!auth) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
+
+      const convRows = await env.DB.prepare(
+        `SELECT c.id, c.created_at,
+                cm_other.user_id AS other_user_id,
+                p.username AS other_username,
+                p.display_name AS other_display_name,
+                p.avatar_media_id AS other_avatar_media_id
+         FROM conversation_members cm
+         JOIN conversations c ON c.id = cm.conversation_id
+         JOIN conversation_members cm_other ON cm_other.conversation_id = c.id AND cm_other.user_id != cm.user_id
+         JOIN profiles p ON p.user_id = cm_other.user_id
+         WHERE cm.user_id = ?`
+      )
+        .bind(auth.user.id)
+        .all<{
+          id: string;
+          created_at: string;
+          other_user_id: string;
+          other_username: string;
+          other_display_name: string;
+          other_avatar_media_id: string | null;
+        }>();
+
+      const convList = convRows.results || [];
+      const nowIso = new Date().toISOString();
+
+      const conversations: ConversationItem[] = [];
+
+      for (const conv of convList) {
+        const lastMsg = await env.DB.prepare(
+          `SELECT id, sender_id, body, sent_at, expires_at
+           FROM messages
+           WHERE conversation_id = ? AND expires_at > ?
+           ORDER BY sent_at DESC, id DESC
+           LIMIT 1`
+        )
+          .bind(conv.id, nowIso)
+          .first<{
+            id: string;
+            sender_id: string;
+            body: string;
+            sent_at: string;
+            expires_at: string;
+          }>();
+
+        conversations.push({
+          id: conv.id,
+          created_at: conv.created_at,
+          other_user: {
+            id: conv.other_user_id,
+            username: conv.other_username,
+            display_name: conv.other_display_name,
+            avatar_media_id: conv.other_avatar_media_id,
+          },
+          last_message: lastMsg || null,
+        });
+      }
+
+      // Order conversations by latest activity (last message sent_at or conversation created_at)
+      conversations.sort((a, b) => {
+        const timeA = a.last_message?.sent_at || a.created_at;
+        const timeB = b.last_message?.sent_at || b.created_at;
+        return timeB.localeCompare(timeA);
+      });
+
+      return jsonResponse({ conversations });
+    }
+
+    // POST /api/conversations - Find or create 1:1 conversation with target user
+    if (pathname === '/api/conversations' && method === 'POST') {
+      const auth = await authenticateRequest(request, env.DB);
+      if (!auth) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
+
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'Invalid JSON body' }, 400);
+      }
+
+      const parseResult = createConversationSchema.safeParse(body);
+      if (!parseResult.success) {
+        return jsonResponse(
+          { error: 'Validation failed', issues: parseResult.error.issues },
+          400
+        );
+      }
+
+      const targetUserId = parseResult.data.user_id;
+      if (targetUserId === auth.user.id) {
+        return jsonResponse({ error: 'Cannot start conversation with yourself' }, 400);
+      }
+
+      const targetUser = await env.DB.prepare(
+        'SELECT u.id, p.username, p.display_name, p.avatar_media_id FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?'
+      )
+        .bind(targetUserId)
+        .first<{ id: string; username: string; display_name: string; avatar_media_id: string | null }>();
+
+      if (!targetUser) {
+        return jsonResponse({ error: 'User not found' }, 404);
+      }
+
+      // Check DM policy & blocking permissions
+      const check = await canSendDmTo(env.DB, auth.user.id, targetUserId);
+      if (!check.allowed) {
+        return jsonResponse({ error: check.reason }, 403);
+      }
+
+      // Check if 1:1 conversation already exists
+      const existing = await env.DB.prepare(
+        `SELECT cm1.conversation_id AS id, c.created_at
+         FROM conversation_members cm1
+         JOIN conversation_members cm2 ON cm1.conversation_id = cm2.conversation_id
+         JOIN conversations c ON c.id = cm1.conversation_id
+         WHERE cm1.user_id = ? AND cm2.user_id = ?
+         LIMIT 1`
+      )
+        .bind(auth.user.id, targetUserId)
+        .first<{ id: string; created_at: string }>();
+
+      if (existing) {
+        const nowIso = new Date().toISOString();
+        const lastMsg = await env.DB.prepare(
+          `SELECT id, sender_id, body, sent_at, expires_at
+           FROM messages
+           WHERE conversation_id = ? AND expires_at > ?
+           ORDER BY sent_at DESC, id DESC
+           LIMIT 1`
+        )
+          .bind(existing.id, nowIso)
+          .first<{ id: string; sender_id: string; body: string; sent_at: string; expires_at: string }>();
+
+        const item: ConversationItem = {
+          id: existing.id,
+          created_at: existing.created_at,
+          other_user: {
+            id: targetUser.id,
+            username: targetUser.username,
+            display_name: targetUser.display_name,
+            avatar_media_id: targetUser.avatar_media_id,
+          },
+          last_message: lastMsg || null,
+        };
+        return jsonResponse({ conversation: item }, 200);
+      }
+
+      // Create new conversation
+      const convId = `conv_${generateRandomString(16).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      const now = new Date().toISOString();
+
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO conversations (id, created_at) VALUES (?, ?)').bind(convId, now),
+        env.DB.prepare('INSERT INTO conversation_members (conversation_id, user_id) VALUES (?, ?)').bind(convId, auth.user.id),
+        env.DB.prepare('INSERT INTO conversation_members (conversation_id, user_id) VALUES (?, ?)').bind(convId, targetUserId),
+      ]);
+
+      const item: ConversationItem = {
+        id: convId,
+        created_at: now,
+        other_user: {
+          id: targetUser.id,
+          username: targetUser.username,
+          display_name: targetUser.display_name,
+          avatar_media_id: targetUser.avatar_media_id,
+        },
+        last_message: null,
+      };
+
+      return jsonResponse({ conversation: item }, 201);
+    }
+
+    // GET /api/conversations/:id/messages - Paginated messages in a conversation
+    if (pathname.match(/^\/api\/conversations\/[^/]+\/messages$/) && method === 'GET') {
+      const auth = await authenticateRequest(request, env.DB);
+      if (!auth) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
+
+      const convId = pathname.split('/')[3]!;
+
+      // Enforce membership
+      const membership = await env.DB.prepare(
+        'SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?'
+      )
+        .bind(convId, auth.user.id)
+        .first();
+
+      if (!membership) {
+        return jsonResponse({ error: 'Forbidden: Not a member of this conversation' }, 403);
+      }
+
+      const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 20), 1), 50);
+      const cursorParam = url.searchParams.get('cursor');
+      const nowIso = new Date().toISOString();
+
+      let query = `
+        SELECT m.id, m.conversation_id, m.sender_id, m.body, m.sent_at, m.expires_at,
+               p.username AS sender_username, p.display_name AS sender_display_name
+        FROM messages m
+        JOIN profiles p ON p.user_id = m.sender_id
+        WHERE m.conversation_id = ? AND m.expires_at > ?
+      `;
+      const params: unknown[] = [convId, nowIso];
+
+      if (cursorParam) {
+        const decoded = decodeCursor(cursorParam);
+        if (decoded) {
+          query += ' AND (m.sent_at < ? OR (m.sent_at = ? AND m.id < ?))';
+          params.push(decoded.createdAt, decoded.createdAt, decoded.id);
+        }
+      }
+
+      query += ' ORDER BY m.sent_at DESC, m.id DESC LIMIT ?';
+      params.push(limit + 1);
+
+      const msgRows = await env.DB.prepare(query).bind(...params).all<{
+        id: string;
+        conversation_id: string;
+        sender_id: string;
+        body: string;
+        sent_at: string;
+        expires_at: string;
+        sender_username: string;
+        sender_display_name: string;
+      }>();
+
+      const results = msgRows.results || [];
+      const hasMore = results.length > limit;
+      const items = hasMore ? results.slice(0, limit) : results;
+
+      const nextCursor =
+        hasMore && items.length > 0
+          ? encodeCursor(items[items.length - 1]!.sent_at, items[items.length - 1]!.id)
+          : null;
+
+      // Hydrate attached media in single batch query
+      const messageIds = items.map((m) => m.id);
+      const mediaMap = new Map<string, MediaItem[]>();
+
+      if (messageIds.length > 0) {
+        const placeholders = messageIds.map(() => '?').join(',');
+        const mediaRows = await env.DB.prepare(
+          `SELECT mm.message_id, m.id, m.object_key, m.mime_type, m.size_bytes
+           FROM message_media mm
+           JOIN media m ON m.id = mm.media_id
+           WHERE mm.message_id IN (${placeholders})`
+        )
+          .bind(...messageIds)
+          .all<{ message_id: string; id: string; object_key: string; mime_type: string; size_bytes: number }>();
+
+        for (const mr of mediaRows.results || []) {
+          const list = mediaMap.get(mr.message_id) || [];
+          list.push({
+            id: mr.id,
+            object_key: mr.object_key,
+            mime_type: mr.mime_type,
+            size_bytes: mr.size_bytes,
+          });
+          mediaMap.set(mr.message_id, list);
+        }
+      }
+
+      const messages: MessageItem[] = items.map((m) => ({
+        id: m.id,
+        conversation_id: m.conversation_id,
+        sender_id: m.sender_id,
+        sender_username: m.sender_username,
+        sender_display_name: m.sender_display_name,
+        body: m.body,
+        sent_at: m.sent_at,
+        expires_at: m.expires_at,
+        media: mediaMap.get(m.id) || [],
+      }));
+
+      return jsonResponse({
+        messages,
+        next_cursor: nextCursor,
+        has_more: hasMore,
+      });
+    }
+
+    // POST /api/conversations/:id/messages - Send message to conversation
+    if (pathname.match(/^\/api\/conversations\/[^/]+\/messages$/) && method === 'POST') {
+      const auth = await authenticateRequest(request, env.DB);
+      if (!auth) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
+
+      const convId = pathname.split('/')[3]!;
+
+      // Enforce membership
+      const membership = await env.DB.prepare(
+        'SELECT 1 FROM conversation_members WHERE conversation_id = ? AND user_id = ?'
+      )
+        .bind(convId, auth.user.id)
+        .first();
+
+      if (!membership) {
+        return jsonResponse({ error: 'Forbidden: Not a member of this conversation' }, 403);
+      }
+
+      // Check other member(s) permissions
+      const otherMembers = await env.DB.prepare(
+        'SELECT user_id FROM conversation_members WHERE conversation_id = ? AND user_id != ?'
+      )
+        .bind(convId, auth.user.id)
+        .all<{ user_id: string }>();
+
+      for (const other of otherMembers.results || []) {
+        const check = await canSendDmTo(env.DB, auth.user.id, other.user_id);
+        if (!check.allowed) {
+          return jsonResponse({ error: check.reason }, 403);
+        }
+      }
+
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'Invalid JSON body' }, 400);
+      }
+
+      const parseResult = createMessageSchema.safeParse(body);
+      if (!parseResult.success) {
+        return jsonResponse(
+          { error: 'Validation failed', issues: parseResult.error.issues },
+          400
+        );
+      }
+
+      const { body: msgBody, media_ids = [] } = parseResult.data;
+
+      // Validate media ownership
+      const mediaItems: MediaItem[] = [];
+      if (media_ids && media_ids.length > 0) {
+        for (const mid of media_ids) {
+          const m = await env.DB.prepare(
+            'SELECT id, owner_id, object_key, mime_type, size_bytes FROM media WHERE id = ?'
+          )
+            .bind(mid)
+            .first<MediaRow>();
+
+          if (!m || m.owner_id !== auth.user.id) {
+            return jsonResponse({ error: `Invalid media attachment: ${mid}` }, 400);
+          }
+          mediaItems.push({
+            id: m.id,
+            object_key: m.object_key,
+            mime_type: m.mime_type,
+            size_bytes: m.size_bytes,
+          });
+        }
+      }
+
+      const msgId = `msg_${generateRandomString(16).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      const nowMs = Date.now();
+      const sentAt = new Date(nowMs).toISOString();
+      const expiresAt = new Date(nowMs + 14 * 24 * 60 * 60 * 1000).toISOString();
+
+      const batchStatements: D1PreparedStatement[] = [
+        env.DB.prepare(
+          'INSERT INTO messages (id, conversation_id, sender_id, body, sent_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(msgId, convId, auth.user.id, msgBody, sentAt, expiresAt),
+      ];
+
+      for (const m of mediaItems) {
+        batchStatements.push(
+          env.DB.prepare('INSERT INTO message_media (message_id, media_id) VALUES (?, ?)').bind(msgId, m.id)
+        );
+        batchStatements.push(
+          env.DB.prepare('UPDATE media SET expires_at = ? WHERE id = ?').bind(expiresAt, m.id)
+        );
+      }
+
+      await env.DB.batch(batchStatements);
+
+      const messageItem: MessageItem = {
+        id: msgId,
+        conversation_id: convId,
+        sender_id: auth.user.id,
+        sender_username: auth.profile.username,
+        sender_display_name: auth.profile.display_name,
+        body: msgBody,
+        sent_at: sentAt,
+        expires_at: expiresAt,
+        media: mediaItems,
+      };
+
+      return jsonResponse({ message: messageItem }, 201);
+    }
+
+    // GET /api/blocks - List blocked users
+    if (pathname === '/api/blocks' && method === 'GET') {
+      const auth = await authenticateRequest(request, env.DB);
+      if (!auth) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
+
+      const blocks = await env.DB.prepare(
+        `SELECT b.blocked_id AS user_id, p.username, p.display_name, b.created_at
+         FROM blocks b
+         JOIN profiles p ON p.user_id = b.blocked_id
+         WHERE b.blocker_id = ?
+         ORDER BY b.created_at DESC`
+      )
+        .bind(auth.user.id)
+        .all<BlockItem>();
+
+      return jsonResponse({ blocks: blocks.results || [] });
+    }
+
+    // POST /api/blocks or POST /api/blocks/:id - Block a user
+    if ((pathname === '/api/blocks' || pathname.startsWith('/api/blocks/')) && method === 'POST') {
+      const auth = await authenticateRequest(request, env.DB);
+      if (!auth) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
+
+      let targetUserId = '';
+      if (pathname.startsWith('/api/blocks/') && pathname !== '/api/blocks') {
+        targetUserId = pathname.slice('/api/blocks/'.length);
+      } else {
+        let body: unknown;
+        try {
+          body = await request.json();
+        } catch {
+          return jsonResponse({ error: 'Invalid JSON body' }, 400);
+        }
+        const parseResult = createBlockSchema.safeParse(body);
+        if (!parseResult.success) {
+          return jsonResponse({ error: 'Validation failed', issues: parseResult.error.issues }, 400);
+        }
+        targetUserId = parseResult.data.user_id;
+      }
+
+      if (targetUserId === auth.user.id) {
+        return jsonResponse({ error: 'Cannot block yourself' }, 400);
+      }
+
+      const targetUser = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetUserId).first();
+      if (!targetUser) {
+        return jsonResponse({ error: 'User not found' }, 404);
+      }
+
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        'INSERT OR IGNORE INTO blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)'
+      )
+        .bind(auth.user.id, targetUserId, now)
+        .run();
+
+      return jsonResponse({ success: true, message: 'User blocked' }, 201);
+    }
+
+    // DELETE /api/blocks/:id - Unblock a user
+    if (pathname.startsWith('/api/blocks/') && method === 'DELETE') {
+      const auth = await authenticateRequest(request, env.DB);
+      if (!auth) {
+        return jsonResponse({ error: 'Unauthorized' }, 401);
+      }
+
+      const targetUserId = pathname.slice('/api/blocks/'.length);
+
+      await env.DB.prepare('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?')
+        .bind(auth.user.id, targetUserId)
+        .run();
+
+      return jsonResponse({ success: true, message: 'User unblocked' });
+    }
+
     // POST /api/reports - File a moderation report (FIX #8)
     if (pathname === '/api/reports' && method === 'POST') {
       const auth = await authenticateRequest(request, env.DB);
@@ -1745,6 +2371,7 @@ export default {
       const { target_type, target_id, reason } = parseResult.data;
 
       // FIX #8: Verify target exists
+      let reportedMessage: MessageRow | null = null;
       if (target_type === 'post') {
         const p = await env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(target_id).first();
         if (!p) return jsonResponse({ error: 'Post target not found' }, 404);
@@ -1754,6 +2381,10 @@ export default {
       } else if (target_type === 'user') {
         const u = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(target_id).first();
         if (!u) return jsonResponse({ error: 'User target not found' }, 404);
+      } else if (target_type === 'message') {
+        const m = await env.DB.prepare('SELECT * FROM messages WHERE id = ?').bind(target_id).first<MessageRow>();
+        if (!m) return jsonResponse({ error: 'Message target not found' }, 404);
+        reportedMessage = m;
       }
 
       // FIX #8: One open report per reporter and target
@@ -1773,11 +2404,43 @@ export default {
       const reportId = `rep_${generateRandomString(16).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
       const now = new Date().toISOString();
 
-      await env.DB.prepare(
-        'INSERT INTO reports (id, reporter_id, target_type, target_id, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      )
-        .bind(reportId, auth.user.id, target_type, target_id, reason, 'pending', now)
-        .run();
+      const batchStatements: D1PreparedStatement[] = [
+        env.DB.prepare(
+          'INSERT INTO reports (id, reporter_id, target_type, target_id, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).bind(reportId, auth.user.id, target_type, target_id, reason, 'pending', now),
+      ];
+
+      if (target_type === 'message' && reportedMessage) {
+        const mediaRows = await env.DB.prepare(
+          `SELECT m.object_key FROM media m
+           JOIN message_media mm ON mm.media_id = m.id
+           WHERE mm.message_id = ?`
+        )
+          .bind(reportedMessage.id)
+          .all<{ object_key: string }>();
+
+        const attachmentKeys = (mediaRows.results || []).map((r) => r.object_key);
+        const snapshot = JSON.stringify({
+          message_id: reportedMessage.id,
+          conversation_id: reportedMessage.conversation_id,
+          sender_id: reportedMessage.sender_id,
+          body: reportedMessage.body,
+          sent_at: reportedMessage.sent_at,
+          expires_at: reportedMessage.expires_at,
+          attachment_keys: attachmentKeys,
+        });
+
+        const evidenceId = `evi_${generateRandomString(16).toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+        const evidenceExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+        batchStatements.push(
+          env.DB.prepare(
+            'INSERT INTO report_evidence (id, report_id, snapshot, created_at, expires_at) VALUES (?, ?, ?, ?, ?)'
+          ).bind(evidenceId, reportId, snapshot, now, evidenceExpiresAt)
+        );
+      }
+
+      await env.DB.batch(batchStatements);
 
       return jsonResponse(
         { success: true, message: 'Report submitted successfully', id: reportId },

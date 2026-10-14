@@ -13,9 +13,9 @@ database_id = "placeholder-d1-id"
 binding = "MEDIA_BUCKET"
 bucket_name = "dialtone-media"
 
-# Daily post expiry lifecycle cron trigger
+# Daily post expiry and hourly trends cron triggers
 [triggers]
-crons = ["0 0 * * *"]
+crons = ["0 0 * * *", "0 * * * *"]
 
 # Non-secret environment variables
 [vars]
